@@ -1,3 +1,7 @@
+# (C) Datadog, Inc. 2016
+# All rights reserved
+# Licensed under Simplified BSD License (see LICENSE)
+
 import unittest
 import os
 
