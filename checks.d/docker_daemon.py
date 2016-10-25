@@ -660,6 +660,13 @@ class DockerDaemon(AgentCheck):
                 status_change.append([container_name, event['status']])
 
             status_text = ", ".join(["%d %s" % (count, st) for st, count in status.iteritems()])
+
+            # health checks generate tons of these so let's lower their priority
+            if 'exec_start:' in status_text or 'exec_create:' in status_text:
+                priority = 'Low'
+            else:
+                priority = 'Normal'
+
             msg_title = "%s %s on %s" % (image_name, status_text, self.hostname)
             msg_body = (
                 "%%%\n"
@@ -688,7 +695,8 @@ class DockerDaemon(AgentCheck):
                 'source_type_name': EVENT_TYPE,
                 'event_object': 'docker:%s' % image_name,
                 'tags': list(container_tags),
-                'alert_type': alert_type
+                'alert_type': alert_type,
+                'priority': priority
             })
 
         return events
