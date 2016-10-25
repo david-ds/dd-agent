@@ -357,6 +357,7 @@ class TestKubernetes(AgentCheckTest):
         self.assertMetric(NAMESPACE + '.deployment.replicas_available')
         self.assertMetric(NAMESPACE + '.deployment.replicas_unavailable')
         self.assertMetric(NAMESPACE + '.deployment.replicas_desired')
+        self.assertMetric(NAMESPACE + '.deployment.replicas_updated')
 
 
 class TestKubeutil(unittest.TestCase):
