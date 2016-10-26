@@ -16,6 +16,14 @@ import requests
 
 DEFAULT_API_REQUEST_TIMEOUT = 5 # seconds
 
+# The build status and the metric type associated
+BUILD_STATUS = {
+    'success': 'count',
+    'failed': 'count',
+    'running': 'gauge',
+    'pending': 'gauge'
+}
+
 class IncompleteConfig(Exception):
     pass
 
@@ -31,6 +39,9 @@ class GitlabCI(AgentCheck):
             raise IncompleteConfig()
         if not self.gitlab_auth_token:
             raise IncompleteConfig()
+
+        # Used to track only the new builds status from the last check
+        self.last_check_date = datetime.now(dateutil.tz.tzutc())
 
     def _make_request_with_auth_fallback(self, url, verify=True, params=None):
         """
@@ -53,6 +64,8 @@ class GitlabCI(AgentCheck):
     def get_gitlab_endpoint(self):
         return '{0}/api/{1}'.format(self.gitlab_master_url, self.gitlab_api_version)
 
+
+    # Runners metrics and events
     def _get_runner_tags(self, runner):
         runner_tags = []
 
@@ -105,5 +118,67 @@ class GitlabCI(AgentCheck):
             self.gauge("gitlab.runners.inactive", inactive_count, tags=list(tags))
 
 
+    def _ci_object_finished_after_last_check(self, ci_object):
+        """ Return true if the ci object has finished since last check
+        The ci object can be a pipeline or a build """
+        if ci_object['finished_at'] == None:
+            return True
+
+        date_finished_at = date_parser.parse(ci_object['finished_at'])
+        return date_finished_at > self.last_check_date
+
+    # Builds metrics and events
+    def _get_projects(self):
+        """ Return the list of the project ids to get its builds or pipelines """
+
+        get_projects_url = '{0}/projects'.format(self.get_gitlab_endpoint())
+        return self._make_request_with_auth_fallback(get_projects_url, verify=self._ssl_verify)
+
+    def _get_build_tags(self, project, build):
+        build_tags = []
+        build_tags.append('project:{0}'.format(project['name']))
+
+        return build_tags
+
+    def check_builds(self, projects):
+        """ Return the list of the builds for all projects with detailled information about them """
+
+        # Inialize empty counter for each status
+        builds_count = {}
+        for status in BUILD_STATUS:
+            builds_count[status] = Counter()
+
+        for project in projects:
+            get_builds_url = '{0}/projects/{1}/builds'.format(self.get_gitlab_endpoint(), project['id'])
+
+            # list of the builds for the given project
+            project_builds = self._make_request_with_auth_fallback(get_builds_url, verify=self._ssl_verify)
+            for build in project_builds:
+                # if the build finished before the last check, ignore it
+                if not self._ci_object_finished_after_last_check(build):
+                    continue
+
+                # If the status build is not monitored, skip the build
+                if not build['status'] in BUILD_STATUS:
+                    continue
+
+                build_tags = self._get_build_tags(project, build)
+
+                builds_count[build['status']][tuple(sorted(build_tags))] += 1
+
+        for status, metric_type in BUILD_STATUS.iteritems():
+            for tags, count in builds_count[status].iteritems():
+                if metric_type == 'count':
+                    self.count("gitlab.builds." + status, count, tags=list(tags))
+                elif metric_type == 'gauge':
+                    self.gauge("gitlab.builds." + status, count, tags=list(tags))
+                else:
+                    raise
+
     def check(self, instance):
         self.get_and_count_runners()
+
+        projects = self._get_projects()
+        self.check_builds(projects)
+
+        self.last_check_date = datetime.now(dateutil.tz.tzutc())
