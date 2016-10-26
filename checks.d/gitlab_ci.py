@@ -7,7 +7,9 @@ from checks import AgentCheck
 
 # stdlib
 from collections import Counter
-from datetime import datetime
+from dateutil import parser as date_parser
+import dateutil.tz
+from datetime import datetime, tzinfo
 
 # api calls
 import requests
@@ -85,6 +87,15 @@ class GitlabCI(AgentCheck):
             runners_count[tuple(sorted(runner_tags))] += 1
             if runner['active']:
                 active_runners_count[tuple(sorted(runner_tags))] += 1
+
+            if not runner['contacted_at'] == None:
+                # Send seconds since last contact between the runner and gitlab master
+                last_contact_date = date_parser.parse(runner['contacted_at'])
+                seconds_since_last_contact = (datetime.now(dateutil.tz.tzutc()) - last_contact_date).total_seconds()
+
+                self.gauge("gitlab.runner.last_contact", seconds_since_last_contact, tags=runner_tags)
+            else:
+                self.log.info("{0} never contacted the master node".format(runner['token']))
 
         for tags, count in active_runners_count.iteritems():
             self.gauge("gitlab.runners.active", count, tags=list(tags))
