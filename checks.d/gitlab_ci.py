@@ -11,6 +11,7 @@ from dateutil import parser as date_parser
 import dateutil.tz
 from datetime import datetime, tzinfo
 import re
+import time
 
 # api calls
 import requests
@@ -200,6 +201,22 @@ class GitlabCI(AgentCheck):
                     raise
 
     # Pipelines metrics
+    def send_pipeline_event(self, project, pipeline):
+        msg_verb = {'success': 'succeed', 'failed': 'failed'}
+        alert_type = {'success': 'success', 'failed': 'error'}
+        pipeline_url = '{0}/pipelines/{1}'.format(project['web_url'], pipeline['id'])
+
+        msg_title = 'The pipeline for {0}:{1} {2} in {3} seconds'.format(project['name'], pipeline['ref'], msg_verb[pipeline['status']], pipeline['duration'])
+
+        self.event({
+            'timestamp': int(time.time()),
+            'event_type': 'gitlab.pipeline.{}'.format(pipeline['status']),
+            'msg_title': msg_title,
+            'msg_text': 'Pipeline url : {}'.format(pipeline_url),
+            'alert_type': alert_type[pipeline['status']],
+            'tags': self._get_ci_object_tags(project, pipeline)
+        })
+
     def check_pipelines(self, projects):
         """ Return the list of the pipelines for all projects with detailled information about them """
 
@@ -229,6 +246,9 @@ class GitlabCI(AgentCheck):
                 # Send metric about pipeline duration if it was successful
                 if pipeline['status'] == "success":
                     self.gauge("gitlab.pipelines.duration", pipeline['duration'], tags=pipeline_tags)
+
+                if pipeline['status'] in ['success', 'failed']:
+                    self.send_pipeline_event(project, pipeline)
 
         for status, metric_type in PIPELINE_STATUS.iteritems():
             for tags, count in pipelines_count[status].iteritems():
