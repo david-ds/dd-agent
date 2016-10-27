@@ -23,6 +23,13 @@ BUILD_STATUS = {
     'running': 'gauge',
     'pending': 'gauge'
 }
+# The pipeline status and the metric type associated
+PIPELINE_STATUS = {
+    'success': 'count',
+    'failed': 'count',
+    'running': 'gauge',
+    'pending': 'gauge'
+}
 
 class IncompleteConfig(Exception):
     pass
@@ -175,10 +182,57 @@ class GitlabCI(AgentCheck):
                 else:
                     raise
 
+    # Pipelines metrics
+    def _get_pipeline_tags(self, project, pipeline):
+        pipeline_tags = []
+        pipeline_tags.append('project:{0}'.format(project['name']))
+
+        return pipeline_tags
+
+    def check_pipelines(self, projects):
+        """ Return the list of the pipelines for all projects with detailled information about them """
+
+        # Inialize empty counter for each status
+        pipelines_count = {}
+        for status in PIPELINE_STATUS:
+            pipelines_count[status] = Counter()
+
+        for project in projects:
+            get_pipelines_url = '{0}/projects/{1}/pipelines'.format(self.get_gitlab_endpoint(), project['id'])
+
+            # list of the pipelines for the given project
+            project_pipelines = self._make_request_with_auth_fallback(get_pipelines_url, verify=self._ssl_verify)
+            for pipeline in project_pipelines:
+                # if the pipeline finished before the last check, ignore it
+                if not self._ci_object_finished_after_last_check(pipeline):
+                    continue
+
+                # If the status pipeline is not monitored, skip the pipeline
+                if not pipeline['status'] in PIPELINE_STATUS:
+                    continue
+
+                pipeline_tags = self._get_pipeline_tags(project, pipeline)
+
+                pipelines_count[pipeline['status']][tuple(sorted(pipeline_tags))] += 1
+
+                # Send metric about pipeline duration if it was successful
+                if pipeline['status'] == "success":
+                    self.gauge("gitlab.pipelines.duration", pipeline['duration'], tags=pipeline_tags)
+
+        for status, metric_type in PIPELINE_STATUS.iteritems():
+            for tags, count in pipelines_count[status].iteritems():
+                if metric_type == 'count':
+                    self.count("gitlab.pipelines." + status, count, tags=list(tags))
+                elif metric_type == 'gauge':
+                    self.gauge("gitlab.pipelines." + status, count, tags=list(tags))
+                else:
+                    raise
+
     def check(self, instance):
         self.get_and_count_runners()
 
         projects = self._get_projects()
         self.check_builds(projects)
+        self.check_pipelines(projects)
 
         self.last_check_date = datetime.now(dateutil.tz.tzutc())
