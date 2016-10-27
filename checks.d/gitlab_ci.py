@@ -10,6 +10,7 @@ from collections import Counter
 from dateutil import parser as date_parser
 import dateutil.tz
 from datetime import datetime, tzinfo
+import re
 
 # api calls
 import requests
@@ -42,6 +43,8 @@ class GitlabCI(AgentCheck):
         self.gitlab_master_url = init_config.get("gitlab_master_url")
         self.gitlab_api_version = init_config.get("gitlab_api_version")
         self.gitlab_auth_token = init_config.get("gitlab_auth_token")
+        self.gitlab_ref_pattern = init_config.get("gitlab_ref_pattern")
+
         if not self.gitlab_master_url:
             raise IncompleteConfig()
         if not self.gitlab_auth_token:
@@ -142,19 +145,25 @@ class GitlabCI(AgentCheck):
         date_finished_at = date_parser.parse(ci_object['finished_at'])
         return date_finished_at > self.last_check_date
 
-    # Builds metrics and events
     def _get_projects(self):
         """ Return the list of the project ids to get its builds or pipelines """
 
         get_projects_url = '{0}/projects'.format(self.get_gitlab_endpoint())
         return self._make_request_with_auth_fallback(get_projects_url, verify=self._ssl_verify)
 
-    def _get_build_tags(self, project, build):
-        build_tags = []
-        build_tags.append('project:{0}'.format(project['name']))
+    def _get_ci_object_tags(self, project, ci_object):
+        """ return the tags of the ci object (pipeline or build) """
+        ci_tags = []
+        ci_tags.append('project:{0}'.format(project['name']))
 
-        return build_tags
+        # Add the ref tag (branch name or git tag name) if it maches the pattern defined in the config file
+        if self.gitlab_ref_pattern and 'ref' in ci_object:
+            if re.match(self.gitlab_ref_pattern, ci_object['ref']):
+                ci_tags.append('gitlab-ref:{0}'.format(ci_object['ref']))
 
+        return ci_tags
+
+    # Builds metrics and events
     def check_builds(self, projects):
         """ Return the list of the builds for all projects with detailled information about them """
 
@@ -177,7 +186,7 @@ class GitlabCI(AgentCheck):
                 if not build['status'] in BUILD_STATUS:
                     continue
 
-                build_tags = self._get_build_tags(project, build)
+                build_tags = self._get_ci_object_tags(project, build)
 
                 builds_count[build['status']][tuple(sorted(build_tags))] += 1
 
@@ -191,12 +200,6 @@ class GitlabCI(AgentCheck):
                     raise
 
     # Pipelines metrics
-    def _get_pipeline_tags(self, project, pipeline):
-        pipeline_tags = []
-        pipeline_tags.append('project:{0}'.format(project['name']))
-
-        return pipeline_tags
-
     def check_pipelines(self, projects):
         """ Return the list of the pipelines for all projects with detailled information about them """
 
@@ -219,7 +222,7 @@ class GitlabCI(AgentCheck):
                 if not pipeline['status'] in PIPELINE_STATUS:
                     continue
 
-                pipeline_tags = self._get_pipeline_tags(project, pipeline)
+                pipeline_tags = self._get_ci_object_tags(project, pipeline)
 
                 pipelines_count[pipeline['status']][tuple(sorted(pipeline_tags))] += 1
 
