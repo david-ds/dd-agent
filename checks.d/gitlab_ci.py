@@ -125,11 +125,19 @@ class GitlabCI(AgentCheck):
             self.gauge("gitlab.runners.inactive", inactive_count, tags=list(tags))
 
 
-    def _ci_object_finished_after_last_check(self, ci_object):
-        """ Return true if the ci object has finished since last check
-        The ci object can be a pipeline or a build """
-        if ci_object['finished_at'] == None:
+    def _ci_object_relevant(self, ci_object):
+        """ The ci object is relevant if:
+        - its status is running or pending
+        - it is a failure or a success finished since the last check
+        The ci object must be a build or a pipeline
+         """
+        if ci_object['status'] in ['running', 'pending']:
             return True
+        if ci_object['finished_at'] == None:
+            # Some pipelines may fail without being finished (yaml syntax error in gitlab-ci.yml)
+            # We keep the pipeline only if it was created since the last check
+            date_created_at = date_parser.parse(ci_object['created_at'])
+            return date_created_at > self.last_check_date
 
         date_finished_at = date_parser.parse(ci_object['finished_at'])
         return date_finished_at > self.last_check_date
@@ -162,7 +170,7 @@ class GitlabCI(AgentCheck):
             project_builds = self._make_request_with_auth_fallback(get_builds_url, verify=self._ssl_verify)
             for build in project_builds:
                 # if the build finished before the last check, ignore it
-                if not self._ci_object_finished_after_last_check(build):
+                if not self._ci_object_relevant(build):
                     continue
 
                 # If the status build is not monitored, skip the build
@@ -204,7 +212,7 @@ class GitlabCI(AgentCheck):
             project_pipelines = self._make_request_with_auth_fallback(get_pipelines_url, verify=self._ssl_verify)
             for pipeline in project_pipelines:
                 # if the pipeline finished before the last check, ignore it
-                if not self._ci_object_finished_after_last_check(pipeline):
+                if not self._ci_object_relevant(pipeline):
                     continue
 
                 # If the status pipeline is not monitored, skip the pipeline
